@@ -83,10 +83,10 @@ import stem.util.str_tools
 from stem import UNDEFINED
 from stem.util import log
 from typing import Any, BinaryIO, Callable, Collection, Dict, Iterator, List, Mapping, Optional, Sequence, Type, Union
-
+from multiprocessing import queues, popen_spawn_posix, synchronize
 # consistent start method across linux, macos & windows, to be the default
 # for python 3.12.
-multiprocessing.set_start_method('spawn')
+# multiprocessing.set_start_method('spawn')
 
 State = stem.util.enum.UppercaseEnum(
   'PENDING',
@@ -244,10 +244,13 @@ class DaemonTask(object):
     self.status = State.PENDING
     self.runtime = None
     self.result = None
-    self.error = None
 
-    self._process = None  # type: Optional[multiprocessing.Process]
-    self._pipe = None  # type: Optional[multiprocessing.connection.Connection]
+    self._context = multiprocessing.get_context('spawn')
+    self._queue = self._context.Queue()
+    self._process = self._context.Process(
+      target = daemon_task_run_wrapper,
+      args = (self._queue, self.priority, self.runner, self.args)
+    )
 
     if start:
       self.run()
@@ -257,10 +260,10 @@ class DaemonTask(object):
     Invokes the task if it hasn't already been started. If it has this is a
     no-op.
     """
+    import pickle
+    pickle.dumps((time.time(),))
 
     if self.status == State.PENDING:
-      self._pipe, child_pipe = multiprocessing.Pipe()
-      self._process = multiprocessing.Process(target = daemon_task_run_wrapper, args = (child_pipe, self.priority, self.runner, self.args))
       self._process.start()
       self.status = State.RUNNING
 
@@ -278,8 +281,9 @@ class DaemonTask(object):
       self.run()
 
     if self.status == State.RUNNING:
-      self._process.join()
-      response = self._pipe.recv()
+      # self._process.join()
+      response = self._queue.get()
+      # self._queue.close()
 
       self.status = response[0]
       self.runtime = response[1]
@@ -303,17 +307,17 @@ class DaemonTask(object):
 #
 # See e.g. https://stackoverflow.com/a/8805244.
 #
-def daemon_task_run_wrapper(conn: 'multiprocessing.connection.Connection', priority: int, runner: Callable, args: Sequence[Any]) -> None:
+def daemon_task_run_wrapper(queue: 'multiprocessing.Queue', priority: int, runner: Callable, args: Sequence[Any]) -> None:
   start_time = time.time()
   os.nice(priority)
 
   try:
     result = runner(*args) if args else runner()
-    conn.send((State.DONE, time.time() - start_time, result))
+    queue.put(1)
   except Exception as exc:
-    conn.send((State.FAILED, time.time() - start_time, exc))
-  finally:
-    conn.close()
+    pass
+    # queue.put((State.FAILED, time.time() - start_time, exc))
+
 
 
 def is_windows() -> bool:
