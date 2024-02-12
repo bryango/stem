@@ -33,6 +33,22 @@ from unittest.mock import Mock, mock_open, patch
 EXAMPLE_DIR = os.path.join(test.STEM_BASE, 'docs', '_static', 'example')
 DESC_DIR = os.path.join(test.STEM_BASE, 'test', 'unit', 'descriptor', 'data')
 
+ORIGINAL_PATH = list(sys.path)
+sys.path.append(EXAMPLE_DIR)
+
+# `fibonacci_multiprocessing` makes use of the multiprocessing helper
+# `stem.util.system.DaemonTask`, whose arguments must be imported at
+# the top level for it to be properly pickled and spawned. See:
+#
+#   https://docs.python.org/3/library/multiprocessing.html
+#
+import fibonacci_multiprocessing  # noqa: E402
+from multiprocessing import connection  # noqa: E402, F401
+if stem.util.system.is_windows():
+  from multiprocessing import popen_spawn_win32  # noqa: F401
+else:
+  from multiprocessing import popen_spawn_posix  # noqa: F401
+
 UNTESTED = (
   # client usage demos don't have much non-stem code
 
@@ -280,8 +296,9 @@ def _download_of(desc):
 
 class TestExamples(unittest.TestCase):
   def setUp(self):
-    self.original_path = list(sys.path)
-    sys.path.append(EXAMPLE_DIR)
+    self.original_path = ORIGINAL_PATH
+    if EXAMPLE_DIR not in sys.path:
+      sys.path.append(EXAMPLE_DIR)
 
   def tearDown(self):
     sys.path = self.original_path
@@ -681,17 +698,14 @@ class TestExamples(unittest.TestCase):
 
   @patch('sys.stdout', new_callable = io.StringIO)
   def test_fibonacci_multiprocessing(self, stdout_mock):
-    # This example intentionally takes a long time (~11 seconds), so replacing
-    # the work it does with a no-op.
-
-    with patch('fibonacci_multiprocessing.fibonacci', Mock(return_value = 5)):
-      import fibonacci_multiprocessing
-
-      fibonacci_multiprocessing.main()
-      self.assertEqual('took 0.0 seconds\n', stdout_mock.getvalue())
+    fibonacci_multiprocessing.main()
+    output = stdout_mock.getvalue()
+    self.assertTrue(output.startswith('took ') and output.endswith(' seconds\n'))
 
   @patch('sys.stdout', new_callable = io.StringIO)
   def test_fibonacci_threaded(self, stdout_mock):
+    # This example intentionally takes a long time (~11 seconds), so replacing
+    # the work it does with a no-op.
     with patch('fibonacci_threaded.fibonacci', Mock(return_value = 5)):
       import fibonacci_threaded
 
