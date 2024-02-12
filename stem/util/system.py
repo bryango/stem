@@ -256,7 +256,7 @@ class DaemonTask(object):
 
     if self.status == State.PENDING:
       self._pipe, child_pipe = multiprocessing.Pipe()
-      self._process = multiprocessing.Process(target = DaemonTask._run_wrapper, args = (child_pipe, self.priority, self.runner, self.args))
+      self._process = multiprocessing.Process(target = daemon_task_run_wrapper, args = (child_pipe, self.priority, self.runner, self.args))
       self._process.start()
       self.status = State.RUNNING
 
@@ -292,18 +292,24 @@ class DaemonTask(object):
     else:
       raise RuntimeError('BUG: unexpected status from daemon task, %s' % self.status)
 
-  @staticmethod
-  def _run_wrapper(conn: 'multiprocessing.connection.Connection', priority: int, runner: Callable, args: Sequence[Any]) -> None:
-    start_time = time.time()
-    os.nice(priority)
+# Note that functions are only picklable if they are defined at the top-level
+# of a module, therefore a @staticmethod of DaemonTask would not work under
+# certain platforms such as darwin, where tasks are `spawn`ed (not `fork`ed),
+# for which pickling are necessary.
+#
+# See e.g. https://stackoverflow.com/a/8805244.
+#
+def daemon_task_run_wrapper(conn: 'multiprocessing.connection.Connection', priority: int, runner: Callable, args: Sequence[Any]) -> None:
+  start_time = time.time()
+  os.nice(priority)
 
-    try:
-      result = runner(*args) if args else runner()
-      conn.send((State.DONE, time.time() - start_time, result))
-    except Exception as exc:
-      conn.send((State.FAILED, time.time() - start_time, exc))
-    finally:
-      conn.close()
+  try:
+    result = runner(*args) if args else runner()
+    conn.send((State.DONE, time.time() - start_time, result))
+  except Exception as exc:
+    conn.send((State.FAILED, time.time() - start_time, exc))
+  finally:
+    conn.close()
 
 
 def is_windows() -> bool:
